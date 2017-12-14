@@ -8,3 +8,5 @@
 6. Calculated predicted class for the test dataset using the Random Forest output.
 7. Confusion matrix is derived for the dataset.
 8. ROC Curve is plotted for the dataset.
+9. ROC Curve is plotted using ROSE package and AUC is calculated
+10. Oversampling, Undersampling, Both & ROSE techniques
