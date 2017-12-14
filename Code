@@ -7,6 +7,7 @@ install.packages("DMwR")
 install.packages("ggplot2")
 install.packages("gridExtra")
 install.packages("AUC")
+install.packages("ROSE")
 
 library(data.table)
 library(corrplot)
@@ -15,6 +16,7 @@ library(DMwR)
 library(ggplot2)
 library(gridExtra)
 library(AUC)
+library(ROSE)
 
 #read raw data
 
@@ -39,9 +41,9 @@ dtTraining = raw.dt[indexTraining,]
 dtTest =   raw.dt[-indexTraining,]
 
 # applying randomforest on training set
-n <- names(dtTraining)
-RFForm <- as.formula(paste("Class ~", paste(n[!n %in% "Class"], collapse = " + ")))
-RFdtTraining <- randomForest(RFForm,dtTraining,ntree=100,importance=T)
+
+RFdtTraining <- randomForest(Class ~ ., dtTraining, ntree=100, importance=T)
+
 
 RFImp <- data.frame(RFdtTraining$importance)
 
@@ -132,17 +134,70 @@ calculate_roc <- function(dtTest, costFP, costFN, k=100) {
 
 roc <- calculate_roc(dtTest, 1, 10, k = 100)
 
+
 #plot ROC
 
-plot(roc$FPR, roc$TPR)
+threshold <- 0.7 #setting threshold
 
+threspos <- which.min(abs(roc$threshold-threshold)) 
 
-  
+ggplot(roc, aes(roc$FPR, roc$TPR)) + 
+  geom_line(color=rgb(0,0,1,alpha=0.3)) + 
+  labs(title = sprintf("ROC")) + xlab("FPR") + ylab("TPR") +
+  geom_hline(yintercept=roc[threspos,"TPR"], alpha=0.5, linetype="dashed") +
+  geom_vline(xintercept=roc[threspos,"FPR"], alpha=0.5, linetype="dashed")
 
+#check the accuracy of this prediction
+accuracy.meas(dtTest$Class, dtTest$predicted)
 
-#applying SMOTE on the training dataset
+#check the final accuracy of this model using ROC curve
+roc.curve(dtTest$Class, dtTest$predicted , plotit = T)
 
-#smoteTraining <- SMOTE(Class ~., dtTraining, k = 5, perc.over = 2, perc.under = 2 )
+#SAMPLING
+
+dtTraining = raw.dt[indexTraining,]
+dtTest =   raw.dt[-indexTraining,]
+
+table(raw.dt$Class) # 0 -- 284315, 1 -- 492
+table(dtTraining$Class) # 0 -- 198998, 1 -- 366
+table(dtTest$Class) # 0 -- 85317, 1 -- 126
+
+#oversampling
+data_balanced_over <- ovun.sample(Class ~ ., data = dtTraining, method = "over",N = 2*nrow(dtTraining))$data
+table(data_balanced_over$Class)
+
+#undersampling
+data_balanced_under <- ovun.sample(Class ~ ., data = dtTraining, method = "under", N = 732, seed = 1)$data
+table(data_balanced_under$Class)
+
+#both
+data_balanced_both <- ovun.sample(Class ~ ., data = dtTraining, method = "both", p=0.5, N=nrow(dtTraining), seed = 1)$data
+table(data_balanced_both$Class)
+
+#ROSE [Random Over-Sampling Examples]
+data.rose <- ROSE(Class ~ ., data = dtTraining, seed = 1)$data
+table(data.rose$Class)
+
+#build random forest models
+RF.rose <- randomForest(Class ~ ., data.rose, ntree=100, importance=T)
+RF.over <- randomForest(Class ~ ., data_balanced_over, ntree=100, importance=T)
+RF.under <- randomForest(Class ~ ., data_balanced_under, ntree=10, importance=T)
+RF.both <- randomForest(Class ~ ., data_balanced_both, ntree=100, importance=T)
+
+#make predictions on unseen data - using random forest
+pred.RF.rose <- predict(RF.rose, dtTest)
+pred.RF.over <- predict(RF.over, dtTest)
+pred.RF.under <- predict(RF.under, dtTest)
+pred.RF.both <- predict(RF.both, dtTest)
+
+#AUC - Random Forest
+
+roc.curve(dtTest$Class, pred.RF.rose, plotit = T) 
+roc.curve(dtTest$Class, pred.RF.over, plotit = T)
+roc.curve(dtTest$Class, pred.RF.under, plotit = T) 
+roc.curve(dtTest$Class, pred.RF.both, plotit = T)
+
+#K-Fold 
 
 
 
