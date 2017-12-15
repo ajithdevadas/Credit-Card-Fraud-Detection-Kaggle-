@@ -197,7 +197,7 @@ roc.curve(dtTest$Class, pred.RF.over, plotit = T)
 roc.curve(dtTest$Class, pred.RF.under, plotit = T) 
 roc.curve(dtTest$Class, pred.RF.both, plotit = T)
 
-#K-Fold 
+
 
 
 
