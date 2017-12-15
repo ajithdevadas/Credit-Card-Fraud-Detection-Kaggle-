@@ -1,0 +1,340 @@
+
+install.packages("dplyr")
+install.packages("data.table")
+install.packages("corrplot")
+install.packages("randomForest")
+install.packages("DMwR")
+install.packages("ggplot2")
+install.packages("gridExtra")
+install.packages("AUC")
+install.packages("ROSE")
+install.packages("plyr")
+
+
+
+library(dplyr)
+library(data.table)
+library(corrplot)
+library(randomForest)
+library(DMwR)
+library(ggplot2)
+library(gridExtra)
+library(AUC)
+library(ROSE)
+library(plyr)
+
+
+
+
+#read raw data
+
+raw.dt <- read.csv("creditcard.csv")
+
+#produce correlation matrix
+
+corr <- cor(raw.dt, method = "pearson")
+
+#plotting the correlation matrix - no correlations found
+
+corrplot.mixed(corr, lower = "number", upper = "circle", tl.pos = "lt", diag = "u")
+
+# function to calculate ROC
+
+calculate_roc <- function(dtTest, k=100) {
+  
+  TP <- function(dtTest, threshold) {
+    sum(dtTest$predicted >= threshold & dtTest$Class == 1)
+  }
+  
+  FP <- function(dtTest, threshold) {
+    sum(dtTest$predicted >= threshold & dtTest$Class == 0)
+  }
+  
+  TN <- function(dtTest, threshold) {
+    sum(dtTest$predicted < threshold & dtTest$Class == 0)
+  }
+  
+  FN <- function(dtTest, threshold) {
+    sum(dtTest$predicted < threshold & dtTest$Class == 1)
+  }
+  
+  TPR <- function(dtTest, threshold) {
+    sum(dtTest$predicted >= threshold & dtTest$Class == 1) / sum(dtTest$Class == 1)
+  }
+  
+  FPR <- function(dtTest, threshold) {
+    sum(dtTest$predicted >= threshold & dtTest$Class == 0) / sum(dtTest$Class == 0)
+  }
+  
+  
+  ROC <- data.frame(threshold = seq(0,1,length.out=k), TPR=NA, FPR=NA)
+  ROC$TP <- sapply(ROC$threshold, function(th) TP(dtTest, th))
+  ROC$FP <- sapply(ROC$threshold, function(th) FP(dtTest, th))
+  ROC$TN <- sapply(ROC$threshold, function(th) TN(dtTest, th))
+  ROC$FN <- sapply(ROC$threshold, function(th) FN(dtTest, th))
+  ROC$TPR <- sapply(ROC$threshold, function(th)TPR(dtTest, th))
+  ROC$FPR <- sapply(ROC$threshold, function(th) FPR(dtTest, th))
+  
+  return(ROC)
+}
+
+#######k-fold cross validation on raw data
+
+data <- raw.dt
+
+glimpse(data)
+
+#cross validation, using rf to predict 
+k = 10
+data$id <- sample(1:k, nrow(data), replace = TRUE)
+list <- 1:k
+
+# prediction and test set data frames that we add to with each iteration over
+# the folds
+prediction <- data.frame()
+testsetCopy <- data.frame()
+
+#Creating a progress bar to know the status of CV
+progress.bar <- create_progress_bar("text")
+progress.bar$init(k)
+
+#function for k fold
+for(i in 1:k){
+  # remove rows with id i from dataframe to create training set
+  # select rows with id i to create test set
+  trainingset <- subset(data, id %in% list[-i])
+  testset <- subset(data, id %in% c(i))
+  
+  #run a random forest model
+  mymodel <- randomForest(trainingset$Class ~ ., trainingset, ntree = 10, importance=T)
+  
+  #remove response column 31, 
+  temp <- as.data.frame(predict(mymodel, testset[,-31]))
+  
+  # append this iteration's predictions to the end of the prediction data frame
+  prediction <- rbind(prediction, temp)
+  
+  # append this iteration's test set to the test set copy data frame
+  testsetCopy <- rbind(testsetCopy, as.data.frame(testset[,31]))
+  
+  progress.bar$step()
+}
+
+result <- cbind(prediction, testsetCopy[, 1])
+names(result) <- c("predicted", "Class")
+
+rockf <- calculate_roc(result, k = 100)
+
+write.csv(rockf, file = "FinalProject - Raw Data.csv")
+
+#plot ROC
+
+threshold <- 0.3 #setting threshold
+
+threspos <- which.min(abs(rockf$threshold-threshold)) 
+
+ggplot(rockf, aes(rockf$FPR, rockf$TPR)) + 
+  geom_line(color=rgb(0,0,1,alpha=0.3)) + 
+  labs(title = sprintf("ROC")) + xlab("FPR") + ylab("TPR") +
+  geom_hline(yintercept=rockf[threspos,"TPR"], alpha=0.5, linetype="dashed") +
+  geom_vline(xintercept=rockf[threspos,"FPR"], alpha=0.5, linetype="dashed")
+
+
+#plot confusion matrix
+
+dtResult <- data.frame(result$Class, round(result$predicted,0))
+names(dtResult) <- c("original","predicted")
+freqTable <- plyr::count(dtResult)
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==0] <- "Not Fraud"
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==1] <- "Fraud"
+
+ggplot(data =  freqTable, mapping = aes(x = original, y = predicted)) +
+  labs(title = "Confusion matrix", subtitle = "Random forest with 10 trees") +
+  geom_tile(aes(fill = freq), colour = "grey") +
+  geom_text(aes(label = sprintf("%1.0f", freq)), vjust = 1) +
+  scale_fill_gradient(low = "lightblue", high = "blue") +
+  theme_bw() + theme(legend.position = "none")
+
+
+#######k-fold cross validation on oversampled dataset
+
+data_balanced_over <- ovun.sample(Class ~ ., data = raw.dt, method = "over",N = 2*nrow(raw.dt))$data
+table(data_balanced_over$Class)
+
+data <- data_balanced_over
+
+glimpse(data)
+
+#cross validation, using rf to predict 
+k = 10
+data$id <- sample(1:k, nrow(data), replace = TRUE)
+list <- 1:k
+
+# prediction and test set data frames that we add to with each iteration over
+# the folds
+prediction <- data.frame()
+testsetCopy <- data.frame()
+
+#Creating a progress bar to know the status of CV
+progress.bar <- create_progress_bar("text")
+progress.bar$init(k)
+
+#function for k fold
+for(i in 1:k){
+  # remove rows with id i from dataframe to create training set
+  # select rows with id i to create test set
+  trainingset <- subset(data, id %in% list[-i])
+  testset <- subset(data, id %in% c(i))
+  
+  #run a random forest model
+  mymodel <- randomForest(trainingset$Class ~ ., trainingset, ntree = 10, importance=T)
+  
+  #remove response column 1, Sepal.Length
+  temp <- as.data.frame(predict(mymodel, testset[,-31]))
+  
+  # append this iteration's predictions to the end of the prediction data frame
+  prediction <- rbind(prediction, temp)
+  
+  # append this iteration's test set to the test set copy data frame
+  testsetCopy <- rbind(testsetCopy, as.data.frame(testset[,31]))
+  
+  progress.bar$step()
+}
+
+result <- cbind(prediction, testsetCopy[, 1])
+names(result) <- c("predicted", "Class")
+
+rockf <- calculate_roc(result, k = 100)
+
+write.csv(rockf, file = "FinalProject - OS.csv")
+
+#plot ROC
+
+threshold <- 0.3 #setting threshold
+
+threspos <- which.min(abs(rockf$threshold-threshold)) 
+
+ggplot(rockf, aes(rockf$FPR, rockf$TPR)) + 
+  geom_line(color=rgb(0,0,1,alpha=0.3)) + 
+  labs(title = sprintf("ROC")) + xlab("FPR") + ylab("TPR") +
+  geom_hline(yintercept=rockf[threspos,"TPR"], alpha=0.5, linetype="dashed") +
+  geom_vline(xintercept=rockf[threspos,"FPR"], alpha=0.5, linetype="dashed")
+
+
+#plot confusion matrix
+
+dtResult <- data.frame(result$Class, round(result$predicted,0))
+names(dtResult) <- c("original","predicted")
+freqTable <- plyr::count(dtResult)
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==0] <- "Not Fraud"
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==1] <- "Fraud"
+
+ggplot(data =  freqTable, mapping = aes(x = original, y = predicted)) +
+  labs(title = "Confusion matrix", subtitle = "Random forest with 10 trees") +
+  geom_tile(aes(fill = freq), colour = "grey") +
+  geom_text(aes(label = sprintf("%1.0f", freq)), vjust = 1) +
+  scale_fill_gradient(low = "lightblue", high = "blue") +
+  theme_bw() + theme(legend.position = "none")
+
+
+#### since the model is overfitting, we will go for 7:3 division of raw data for train:test
+
+rowCount <- nrow(raw.dt)
+set.seed(300)
+indexTraining <- sample(1:rowCount, 0.7 * rowCount)
+
+dtTraining = raw.dt[indexTraining,]
+dtTest =   raw.dt[-indexTraining,]
+
+#oversampling
+data_balanced_over <- ovun.sample(Class ~ ., data = dtTraining, method = "over",N = 2*nrow(dtTraining))$data
+table(data_balanced_over$Class)
+
+RF.over <- randomForest(Class ~ ., data_balanced_over, ntree=100, importance=T)
+
+pred.RF.over <- predict(RF.over, dtTest)
+
+roc.curve(dtTest$Class, pred.RF.over, plotit = T)
+
+#check the accuracy of this prediction
+accuracy.meas(dtTest$Class, pred.RF.over)
+
+##########undersampling k fold
+data_balanced_under <- ovun.sample(Class ~ ., data = raw.dt, method = "under", N = 984, seed = 1)$data
+table(data_balanced_under$Class)
+
+data <- data_balanced_under
+
+glimpse(data)
+
+#cross validation, using rf to predict 
+k = 10
+data$id <- sample(1:k, nrow(data), replace = TRUE)
+list <- 1:k
+
+# prediction and test set data frames that we add to with each iteration over
+# the folds
+prediction <- data.frame()
+testsetCopy <- data.frame()
+
+#Creating a progress bar to know the status of CV
+progress.bar <- create_progress_bar("text")
+progress.bar$init(k)
+
+#function for k fold
+for(i in 1:k){
+  # remove rows with id i from dataframe to create training set
+  # select rows with id i to create test set
+  trainingset <- subset(data, id %in% list[-i])
+  testset <- subset(data, id %in% c(i))
+  
+  #run a random forest model
+  mymodel <- randomForest(trainingset$Class ~ ., trainingset, ntree = 10, importance=T)
+  
+  #remove response column 1, Sepal.Length
+  temp <- as.data.frame(predict(mymodel, testset[,-31]))
+  
+  # append this iteration's predictions to the end of the prediction data frame
+  prediction <- rbind(prediction, temp)
+  
+  # append this iteration's test set to the test set copy data frame
+  testsetCopy <- rbind(testsetCopy, as.data.frame(testset[,31]))
+  
+  progress.bar$step()
+}
+
+result <- cbind(prediction, testsetCopy[, 1])
+names(result) <- c("predicted", "Class")
+
+rockf <- calculate_roc(result, k = 100)
+
+write.csv(rockf, file = "FinalProject - US.csv")
+
+#plot ROC
+
+threshold <- 0.3 #setting threshold
+
+threspos <- which.min(abs(rockf$threshold-threshold)) 
+
+ggplot(rockf, aes(rockf$FPR, rockf$TPR)) + 
+  geom_line(color=rgb(0,0,1,alpha=0.3)) + 
+  labs(title = sprintf("ROC")) + xlab("FPR") + ylab("TPR") +
+  geom_hline(yintercept=rockf[threspos,"TPR"], alpha=0.5, linetype="dashed") +
+  geom_vline(xintercept=rockf[threspos,"FPR"], alpha=0.5, linetype="dashed")
+
+
+
+#plot confusion matrix
+
+dtResult <- data.frame(result$Class, round(result$predicted,0))
+names(dtResult) <- c("original","predicted")
+freqTable <- plyr::count(dtResult)
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==0] <- "Not Fraud"
+freqTable[c("original","predicted")][freqTable[c("original","predicted")]==1] <- "Fraud"
+
+ggplot(data =  freqTable, mapping = aes(x = original, y = predicted)) +
+  labs(title = "Confusion matrix", subtitle = "Random forest with 10 trees") +
+  geom_tile(aes(fill = freq), colour = "grey") +
+  geom_text(aes(label = sprintf("%1.0f", freq)), vjust = 1) +
+  scale_fill_gradient(low = "lightblue", high = "blue") +
+  theme_bw() + theme(legend.position = "none")
